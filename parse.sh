@@ -20,51 +20,25 @@ clear_log() {
   rm --force "$logfile"
 }
 
-join_by_pipe () {
-  local str=""
-  for arg in "$@"; do
-    str+="${arg}|"
-  done
-  
-  echo "$str"
-}
-
 count_columns () {
   local table="$1"
-  echo "$table" | pup "tr:nth-of-type(1)" | grep -c "<th>"
+  pup "tr:nth-of-type(1)" <<< "$table" | grep -c "<th>"
 }
 
 column () {
   local table="$1"
   local col="$2"
   
-  echo "$table" | pup --charset utf-8 "td:nth-child($col)"
-}
-
-column_cell () {
-  local column="$1"
-  local cell="$2"
-  echo "$column" | pup --charset utf-8 ":nth-of-type($cell)"
-}
-
-column_cells () {
-  dbg "column_cells called. num params: $#."
-  local s="$1"
-  local a=()
-  local i=0
-  
-  while read -r line; do
-    a[i]="${a[i]:-}${line}"$'\n'
-    if [ "$line" == "</td>" ]; then
-      ((++i))
-    fi
-  done <<< "$s"
-  join_by_pipe "${a[@]}"
+  pup --charset utf-8 "td:nth-child($col)" <<< "$table"
 }
 
 column_cells_globals() {
   local -n array="$1"
-  local str="$2"
+  local -r column="$2"
+  local -r table="$3"
+  
+  local -r cells_str=$(pup --charset utf-8 "td:nth-child($column)" <<< "$table")
+  
   local -i i=0
   
   while read -r line; do
@@ -72,7 +46,7 @@ column_cells_globals() {
     if [ "$line" == "</td>" ]; then
       ((++i))
     fi
-  done <<< "$str"
+  done <<< "$cells_str"
 }
 
 decode() {
@@ -89,16 +63,13 @@ declare -a nationalities=()
 declare -a ages=()
 declare -a notes=()
 
-input=$(cat)
+declare -r input=$(cat)
 
 clear_log
 
 dbg "Starting"
 
-table=$(echo "$input" | pup 'table.wikitable')
-
-rows=$(echo "$table" | grep -c "<tr>")
-cols=$(count_columns "$table")
+declare table=$(echo "$input" | pup 'table.wikitable')
 
 declare -i batch
 batch=$(sqlite3 covid.db 'select max(batch) from covid_deaths')
@@ -107,103 +78,66 @@ if [ -z "$batch" ]; then
 fi
 ((++batch))
 
-dates_str=$(column "$table" 1)
-column_cells_globals "dates" "$dates_str"
-echo "${#dates[@]}"
-# dates_str=$(column_cells "$dates_str")
+# dates_str=$(column "$table" 1)
+column_cells_globals "dates" 1 "$table"
 
-# while read -rd "|" date; do
-#   dates+=("$date")
-# done <<< "$dates_str"
+# countries_str=$(column "$table" 2)
+column_cells_globals "countries" 2 "$table"
 
-countries_str=$(column "$table" 2)
-column_cells_globals "countries" "$countries_str"
+# places_str=$(column "$table" 3)
+column_cells_globals "places" 3 "$table"
 
-# countries_str=$(column_cells "$countries_str")
+# names_str=$(column "$table" 4)
+column_cells_globals "names" 4 "$table"
 
-# while read -rd "|" country; do
-#   countries+=("$country")
-# done <<< "$countries_str"
-echo "${#countries[@]}"
+# nationalities_str=$(column "$table" 5)
+column_cells_globals "nationalities" 5 "$table"
 
-places_str=$(column "$table" 3)
-column_cells_globals "places" "$places_str"
-# places_str=$(column_cells "$places_str")
+declare -i ages_col=6
+declare -i notes_col=7
 
-# while read -rd "|" place; do
-#   places+=("$place")
-# done <<< "$places_str"
-
-names_str=$(column "$table" 4)
-column_cells_globals "names" "$names_str"
-# names_str=$(column_cells "$names_str")
-
-# while read -rd "|" name; do
-#   names+=("$name")
-# done <<< "$names_str"
-
-nationalities_str=$(column "$table" 5)
-column_cells_globals "nationalities" "$nationalities_str"
-# nationalities_str=$(column_cells "$nationalities_str")
-
-# while read -rd "|" nationality; do
-#   nationalities+=("$nationality")
-# done <<< "$nationalities_str"
-
-ages_col=6
-notes_col=7
-
+declare -ir cols=$(count_columns "$table")
 if [ "$cols" -gt 7 ]; then
   ((++ages_col))
   ((++notes_col))
 fi
+readonly ages_col
+readonly notes_col
 
-dbg "cols: $cols. ages: $ages_col. notes: $notes_col"
+# ages_str=$(column "$table" "$ages_col")
+column_cells_globals "ages" "$ages_col" "$table"
 
-ages_str=$(column "$table" "$ages_col")
-column_cells_globals "ages" "$ages_str"
-# ages_str=$(column_cells "$ages_str")
-
-# while read -rd "|" age; do
-#   ages+=("$age")
-# done <<< "$ages_str"
-
-notes_str=$(column "$table" "$notes_col")
-column_cells_globals "notes" "$notes_str"
-# notes_str=$(column_cells "$notes_str")
-
-# while read -rd "|" note; do
-#   notes+=("$note")
-# done <<< "$notes_str"
+# notes_str=$(column "$table" "$notes_col")
+column_cells_globals "notes" "$notes_col" "$table"
 
 sql_template=$(< ./insert_template.sql)
 readonly sql_template;
 
 declare -i r=0
-rows=3
-readonly rows
+declare -ir rows=$(grep -c "<tr>" <<< "$table")
+#declare -ir rows=3
 while [ $r -lt "$rows" ]; do
   dbg "Row $r of $rows"
   
   IFS="|"
-  date=$(echo "${dates[$r]}" | pup 'text{}' | xargs | cut -d' ' -f1-2)
+  date=$(pup 'text{}' <<< "${dates[$r]}"| xargs | cut -d' ' -f1-2)
   #dbg "$date"
   
-  country=$(echo "${countries[$r]}" | pup 'text{}' | sed 's/&amp;.*gt;//' | sed 's/\[.*\]//' | xargs)
+  country=$(pup 'text{}' <<< "${countries[$r]}" | sed 's/&amp;.*gt;//' | sed 's/\[.*\]//' | xargs)
   #dbg "$country"
   
-  place=$(echo "${places[$r]}" | pup 'text{}' | xargs)
+  place=$(pup 'text{}' <<< "${places[$r]}" | xargs)
   #dbg "$place"
   
-  name=$(echo "${names[$r]}" | pup 'text{}' | xargs)
+  name=$(pup 'text{}' <<< "${names[$r]}" | xargs)
   #dbg "$name"
   
-  nationality=$(echo "${nationalities[$r]}" | pup 'text{}' | xargs)
+  nationality=$(pup 'text{}' <<< "${nationalities[$r]}" | xargs)
   #dbg "$nationality"
   
-  age=$(echo "${ages[$r]}" | pup 'text{}' | sed 's;/;hello;' | xargs)
+  age=$(pup 'text{}' <<< "${ages[$r]}" | xargs)
   
-  note=$(echo "${notes[$r]}" | pup 'text{}' | sed 's/\[.*\]//' | xargs)
+  note=$(pup 'text{}' <<< "${notes[$r]}" | sed 's/\[.*\]//' | xargs)
   note=$(decode "$note")
   #dbg "$note"
   
@@ -213,7 +147,7 @@ while [ $r -lt "$rows" ]; do
     "-e s/\"\$place\"/\"$place\"/"
     "-e s/\"\$name\"/\"$name\"/"
     "-e s/\"\$nationality\"/\"$nationality\"/"
-    "-e s/\"\$age\"/\"$age\"/"
+    "-e s@\"\$age\"@\"$age\"@"
     "-e s/\"\$note\"/\"$note\"/"
     "-e s/\"\$batch\"/\"$batch\"/"
   )
@@ -221,7 +155,8 @@ while [ $r -lt "$rows" ]; do
   #args="${sed_args[*]}"
   #dbg "$args"
   
-  sql=$(echo "$sql_template" | sed "${sed_args[@]}")
+  declare sql
+  sql=$(sed "${sed_args[@]}" <<< "$sql_template")
   #dbg "$sql"
 
   #sqlite3 covid.db "$sql"
