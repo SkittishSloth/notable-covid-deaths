@@ -12,6 +12,10 @@ dbg() {
   #echo "$(date): $1" >> "$logfile"
 }
 
+dbg_fn() {
+  "$@"
+}
+
 clear_log() {
   rm --force "$logfile"
 }
@@ -58,21 +62,40 @@ column_cells () {
   join_by_pipe "${a[@]}"
 }
 
+column_cells_globals() {
+  local -n array="$1"
+  local str="$2"
+  local -i i=0
+  
+  while read -r line; do
+    array[i]="${array[i]:-}${line}"$'\n'
+    if [ "$line" == "</td>" ]; then
+      ((++i))
+    fi
+  done <<< "$str"
+}
+
 decode() {
   local str="$1"
+  # shellcheck disable=2016
   eval "$(printf '%s' "$str" | sed 's/^/printf "/;s/&#0*\([0-9]*\);/\$( [ \1 -lt 128 ] \&\& printf "\\\\$( printf \"%.3o\\201\" \1)" || \$(which printf) \\\\U\$( printf \"%.8x\" \1) )/g;s/$/\\n"/')" | sed "s/$(printf '\201')//g"
 }
+
+declare -a dates=()
+declare -a countries=()
+declare -a places=()
+declare -a names=()
+declare -a nationalities=()
+declare -a ages=()
+declare -a notes=()
 
 input=$(cat)
 
 clear_log
 
 dbg "Starting"
-nl=$(echo "$input" | wc -l)
-dbg "new lines in input: $nl"
+
 table=$(echo "$input" | pup 'table.wikitable')
-nl=$(echo "$table" | wc -l)
-dbg "new lines in table: $nl"
 
 rows=$(echo "$table" | grep -c "<tr>")
 cols=$(count_columns "$table")
@@ -85,44 +108,47 @@ fi
 ((++batch))
 
 dates_str=$(column "$table" 1)
-dates_str=$(column_cells "$dates_str")
+column_cells_globals "dates" "$dates_str"
+echo "${#dates[@]}"
+# dates_str=$(column_cells "$dates_str")
 
-declare -a dates=()
-while read -rd "|" date; do
-  dates+=("$date")
-done <<< "$dates_str"
+# while read -rd "|" date; do
+#   dates+=("$date")
+# done <<< "$dates_str"
 
 countries_str=$(column "$table" 2)
-countries_str=$(column_cells "$countries_str")
+column_cells_globals "countries" "$countries_str"
 
-declare -a countries=()
-while read -rd "|" country; do
-  countries+=("$country")
-done <<< "$countries_str"
+# countries_str=$(column_cells "$countries_str")
+
+# while read -rd "|" country; do
+#   countries+=("$country")
+# done <<< "$countries_str"
+echo "${#countries[@]}"
 
 places_str=$(column "$table" 3)
-places_str=$(column_cells "$places_str")
+column_cells_globals "places" "$places_str"
+# places_str=$(column_cells "$places_str")
 
-declare -a places=()
-while read -rd "|" place; do
-  places+=("$place")
-done <<< "$places_str"
+# while read -rd "|" place; do
+#   places+=("$place")
+# done <<< "$places_str"
 
 names_str=$(column "$table" 4)
-names_str=$(column_cells "$names_str")
+column_cells_globals "names" "$names_str"
+# names_str=$(column_cells "$names_str")
 
-declare -a names=()
-while read -rd "|" name; do
-  names+=("$name")
-done <<< "$names_str"
+# while read -rd "|" name; do
+#   names+=("$name")
+# done <<< "$names_str"
 
 nationalities_str=$(column "$table" 5)
-nationalities_str=$(column_cells "$nationalities_str")
+column_cells_globals "nationalities" "$nationalities_str"
+# nationalities_str=$(column_cells "$nationalities_str")
 
-declare -a nationalities=()
-while read -rd "|" nationality; do
-  nationalities+=("$nationality")
-done <<< "$nationalities_str"
+# while read -rd "|" nationality; do
+#   nationalities+=("$nationality")
+# done <<< "$nationalities_str"
 
 ages_col=6
 notes_col=7
@@ -135,25 +161,27 @@ fi
 dbg "cols: $cols. ages: $ages_col. notes: $notes_col"
 
 ages_str=$(column "$table" "$ages_col")
-ages_str=$(column_cells "$ages_str")
+column_cells_globals "ages" "$ages_str"
+# ages_str=$(column_cells "$ages_str")
 
-declare -a ages=()
-while read -rd "|" age; do
-  ages+=("$age")
-done <<< "$ages_str"
+# while read -rd "|" age; do
+#   ages+=("$age")
+# done <<< "$ages_str"
 
 notes_str=$(column "$table" "$notes_col")
-notes_str=$(column_cells "$notes_str")
+column_cells_globals "notes" "$notes_str"
+# notes_str=$(column_cells "$notes_str")
 
-declare -a notes=()
-while read -rd "|" note; do
-  notes+=("$note")
-done <<< "$notes_str"
+# while read -rd "|" note; do
+#   notes+=("$note")
+# done <<< "$notes_str"
 
-declare sql_template=$(< ./insert_template.sql)
+sql_template=$(< ./insert_template.sql)
+readonly sql_template;
 
-r=0
-#rows=3
+declare -i r=0
+rows=3
+readonly rows
 while [ $r -lt "$rows" ]; do
   dbg "Row $r of $rows"
   
@@ -190,13 +218,13 @@ while [ $r -lt "$rows" ]; do
     "-e s/\"\$batch\"/\"$batch\"/"
   )
   
-  args="${sed_args[@]}"
+  #args="${sed_args[*]}"
   #dbg "$args"
   
   sql=$(echo "$sql_template" | sed "${sed_args[@]}")
   #dbg "$sql"
 
-  sqlite3 covid.db "$sql"
+  #sqlite3 covid.db "$sql"
   #dbg "sql executed."
   ((++r))
 done
