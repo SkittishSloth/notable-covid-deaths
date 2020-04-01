@@ -67,9 +67,6 @@ dbg "new lines in input: $nl"
 table=$(echo "$input" | pup 'table.wikitable')
 nl=$(echo "$table" | wc -l)
 dbg "new lines in table: $nl"
-header=$(echo "$table" | pup 'tr:nth-of-type(1) json{}' | jq -r '[.[].children[].text]')
-dbg "headers: $header"
-header=$(echo "$header" | jq -r '{"date": .[0], "country": .[1], "place": .[2], "name": .[3], "nationality": .[4], "dob": .[5], "age": .[6]}')
 
 rows=$(echo "$table" | grep -c "<tr>")
 cols=$(count_columns "$table")
@@ -90,7 +87,7 @@ echo "$dates"
 pipes=$(echo "$dates" | grep -o "|" | wc -l)
 echo "pipes: $pipes"
 echo "dates 1: ${#dates[@]}"
-IFS='|' read -ra dates <<< "$dates"
+IFS='|' read  -d '' <-ra dates <<< "$dates"
 echo "dates 2: ${#dates[@]}"
 #dbg "IFS 2: ::$IFS::"
 
