@@ -11,13 +11,15 @@ declare -r __base="$(basename ${__file} .sh)"
 
 declare -r logfile="${__dir}/log.txt"
 
+source "${__dir}/lib/dates.sh"
+
 dbg() {
   :
   echo "$(date): $1" >> "$logfile"
 }
 
 clear_log() {
-  rm --force "$logfile"
+  rm -f "$logfile"
 }
 
 count_columns() {
@@ -59,11 +61,11 @@ decode() {
   # Very much black magic - no idea how it
   # works, so I don't want to "fix" it.
   # shellcheck disable=2016
-  eval "$(printf '%s' "$1" | sed 's/^/printf "/;s/&#0*\([0-9]*\);/\$( [ \1 -lt 128 ] \&\& printf "\\\\$( printf \"%.3o\\201\" \1)" || \$(which printf) \\\\U\$( printf \"%.8x\" \1) )/g;s/$/\\n"/')" | sed "s/$(printf '\201')//g"
+  eval "$(printf '%s' "$1" | LC_ALL=C sed 's/^/printf "/;s/&#0*\([0-9]*\);/\$( [ \1 -lt 128 ] \&\& printf "\\\\$( printf \"%.3o\\201\" \1)" || \$(which printf) \\\\U\$( printf \"%.8x\" \1) )/g;s/$/\\n"/')" | LC_ALL=C sed "s/$(printf '\201')//g"
 }
 
 clean_contents() {
-  pup --charset utf-8 'text{}' <<< "$1" | sed --expression='s/&amp;.*gt;//' --expression 's/\[.*\]//' | xargs
+  pup --charset utf-8 'text{}' <<< "$1" | sed -e 's/&amp;.*gt;//' -e 's/\[.*\]//' | xargs
 }
 
 declare -a dates=()
@@ -139,8 +141,9 @@ while [ $r -lt "$rows" ]; do
   date=$(clean_contents "${dates[$r]}" | cut -d' ' -f1-2)
   #dbg "$date"
   
-  sort_date_str=$(printf "%s 2020" "$date")
-  sort_date=$(date --date="$sort_date_str" +"%Y%m%d")
+  #sort_date_str=$(printf "%s 2020" "$date")
+  parse_sort_date sort_date "$date"
+  #sort_date=$(date --date="$sort_date_str" +"%Y%m%d")
   
   country=$(clean_contents "${countries[$r]}")
   #dbg "$country"
@@ -162,15 +165,15 @@ while [ $r -lt "$rows" ]; do
   #dbg "$note"
   
   declare -a sed_args=(
-    "--expression=s/\"\$date\"/\"$date\"/"
-    "--expression=s/\"\$sort_date\"/\"$sort_date\"/"
-    "--expression=s/\"\$country\"/\"$country\"/"
-    "--expression=s/\"\$place\"/\"$place\"/"
-    "--expression=s/\"\$name\"/\"$name\"/"
-    "--expression=s@\"\$nationality\"@\"$nationality\"@"
-    "--expression=s@\"\$age\"@\"$age\"@"
-    "--expression=s/\"\$note\"/\"$note\"/"
-    "--expression=s/\"\$batch\"/\"$batch\"/"
+    "-e s/\"\$date\"/\"$date\"/"
+    "-e s/\"\$sort_date\"/\"$sort_date\"/"
+    "-e s/\"\$country\"/\"$country\"/"
+    "-e s/\"\$place\"/\"$place\"/"
+    "-e s/\"\$name\"/\"$name\"/"
+    "-e s@\"\$nationality\"@\"$nationality\"@"
+    "-e s@\"\$age\"@\"$age\"@"
+    "-e s/\"\$note\"/\"$note\"/"
+    "-e s/\"\$batch\"/\"$batch\"/"
   )
   
   populated_sql=$(sed "${sed_args[@]}" <<< "$sql_template")
