@@ -11,6 +11,7 @@
 
 CREATE TABLE covid_deaths(
 	date TEXT NOT NULL,
+	sort_date TEXT NOT NULL,
 	country TEXT NOT NULL,
 	place TEXT,
 	name TEXT NOT NULL,

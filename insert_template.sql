@@ -1,4 +1,4 @@
-INSERT INTO covid_deaths(date, country, place, name, nationality, age, notes, batch) VALUES("$date", "$country", "$place", "$name", "$nationality", "$age", "$note", "$batch")
+INSERT INTO covid_deaths(date, sort_date, country, place, name, nationality, age, notes, batch) VALUES("$date", "$sort_date", "$country", "$place", "$name", "$nationality", "$age", "$note", "$batch")
 ON CONFLICT(date, name) DO UPDATE SET
 	country=excluded.country,
 	place=excluded.place,

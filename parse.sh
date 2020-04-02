@@ -1,58 +1,69 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -o errexit
 set -o errtrace
 set -o nounset
 set -o pipefail
 
-logfile="log.txt"
+declare -r __dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+declare -r __file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+declare -r __base="$(basename ${__file} .sh)"
+
+declare -r logfile="${__dir}/log.txt"
 
 dbg() {
   :
-  #echo "$(date): $1" >> "$logfile"
-}
-
-dbg_fn() {
-  "$@"
+  echo "$(date): $1" >> "$logfile"
 }
 
 clear_log() {
   rm --force "$logfile"
 }
 
-count_columns () {
+count_columns() {
   local table="$1"
-  pup "tr:nth-of-type(1)" <<< "$table" | grep -c "<th>"
+  pup "tr:nth-of-type(1)" <<< "$table" | grep --count "<th>"
 }
 
-column () {
+column() {
   local table="$1"
   local col="$2"
   
   pup --charset utf-8 "td:nth-child($col)" <<< "$table"
 }
 
-column_cells_globals() {
-  local -n array="$1"
-  local -r column="$2"
-  local -r table="$3"
+column_cells() {
+  local -n __arrays="$1"
+  local -r table="$2"
   
-  local -r cells_str=$(pup --charset utf-8 "td:nth-child($column)" <<< "$table")
-  
-  local -i i=0
-  
-  while read -r line; do
-    array[i]="${array[i]:-}${line}"$'\n'
-    if [ "$line" == "</td>" ]; then
-      ((++i))
-    fi
-  done <<< "$cells_str"
+  for a in "${!__arrays[@]}"; do
+    local -n __array="$a"
+    
+    local -i column="${__arrays[$a]}"
+    
+    local cells_str
+    cells_str=$(pup --charset utf-8 "td:nth-child($column)" <<< "$table")
+    local -i i=0
+    
+    while read -r line; do
+      __array[i]="${__array[i]:-}${line}"$'\n'
+      if [ "$line" == "</td>" ]; then
+        ((++i))
+      fi
+    done <<< "$cells_str"
+  done
 }
 
 decode() {
-  local str="$1"
+  # I copied this from somewhere on the web.
+  # Very much black magic - no idea how it
+  # works, so I don't want to "fix" it.
   # shellcheck disable=2016
-  eval "$(printf '%s' "$str" | sed 's/^/printf "/;s/&#0*\([0-9]*\);/\$( [ \1 -lt 128 ] \&\& printf "\\\\$( printf \"%.3o\\201\" \1)" || \$(which printf) \\\\U\$( printf \"%.8x\" \1) )/g;s/$/\\n"/')" | sed "s/$(printf '\201')//g"
+  eval "$(printf '%s' "$1" | sed 's/^/printf "/;s/&#0*\([0-9]*\);/\$( [ \1 -lt 128 ] \&\& printf "\\\\$( printf \"%.3o\\201\" \1)" || \$(which printf) \\\\U\$( printf \"%.8x\" \1) )/g;s/$/\\n"/')" | sed "s/$(printf '\201')//g"
+}
+
+clean_contents() {
+  pup --charset utf-8 'text{}' <<< "$1" | sed --expression='s/&amp;.*gt;//' --expression 's/\[.*\]//' | xargs
 }
 
 declare -a dates=()
@@ -63,13 +74,16 @@ declare -a nationalities=()
 declare -a ages=()
 declare -a notes=()
 
-declare -r input=$(cat)
+declare input
+input=$(cat)
+readonly input
 
 clear_log
 
 dbg "Starting"
 
-declare table=$(echo "$input" | pup 'table.wikitable')
+declare table
+table=$(pup 'table.wikitable' <<< "$input")
 
 declare -i batch
 batch=$(sqlite3 covid.db 'select max(batch) from covid_deaths')
@@ -77,26 +91,14 @@ if [ -z "$batch" ]; then
   batch=0
 fi
 ((++batch))
-
-# dates_str=$(column "$table" 1)
-column_cells_globals "dates" 1 "$table"
-
-# countries_str=$(column "$table" 2)
-column_cells_globals "countries" 2 "$table"
-
-# places_str=$(column "$table" 3)
-column_cells_globals "places" 3 "$table"
-
-# names_str=$(column "$table" 4)
-column_cells_globals "names" 4 "$table"
-
-# nationalities_str=$(column "$table" 5)
-column_cells_globals "nationalities" 5 "$table"
+readonly batch
 
 declare -i ages_col=6
 declare -i notes_col=7
 
-declare -ir cols=$(count_columns "$table")
+declare -i cols
+cols=$(count_columns "$table")
+readonly cols
 if [ "$cols" -gt 7 ]; then
   ((++ages_col))
   ((++notes_col))
@@ -104,63 +106,77 @@ fi
 readonly ages_col
 readonly notes_col
 
-# ages_str=$(column "$table" "$ages_col")
-column_cells_globals "ages" "$ages_col" "$table"
+# This isn't directly referenced, but
+# it's used via nameref.
+# shellcheck disable=2034
+declare -A arrays_columns=(
+  ["dates"]=1
+  ["countries"]=2
+  ["places"]=3
+  ["names"]=4
+  ["nationalities"]=5
+  ["ages"]="$ages_col"
+  ["notes"]="$notes_col"
+)
 
-# notes_str=$(column "$table" "$notes_col")
-column_cells_globals "notes" "$notes_col" "$table"
+column_cells "arrays_columns" "$table"
 
-sql_template=$(< ./insert_template.sql)
-readonly sql_template;
+declare sql_template
+sql_template=$(< "$__dir"/insert_template.sql)
+readonly sql_template
 
 declare -i r=0
-declare -ir rows=$(grep -c "<tr>" <<< "$table")
+
+declare -i rows
+rows=$(grep --count "<tr>" <<< "$table")
+#rows=3
+readonly rows
 
 declare -a sql=("BEGIN TRANSACTION;")
-#declare -ir rows=3
 while [ $r -lt "$rows" ]; do
-  dbg "Row $r of $rows"
+  #dbg "Row $r of $rows"
   
-  date=$(pup 'text{}' <<< "${dates[$r]}"| xargs | cut -d' ' -f1-2)
+  date=$(clean_contents "${dates[$r]}" | cut -d' ' -f1-2)
   #dbg "$date"
   
-  country=$(pup 'text{}' <<< "${countries[$r]}" | sed 's/&amp;.*gt;//' | sed 's/\[.*\]//' | xargs)
+  sort_date_str=$(printf "%s 2020" "$date")
+  sort_date=$(date --date="$sort_date_str" +"%Y%m%d")
+  
+  country=$(clean_contents "${countries[$r]}")
   #dbg "$country"
   
-  place=$(pup 'text{}' <<< "${places[$r]}" | xargs)
+  place=$(clean_contents "${places[$r]}")
   #dbg "$place"
   
-  name=$(pup 'text{}' <<< "${names[$r]}" | xargs)
+  name=$(clean_contents "${names[$r]}")
   #dbg "$name"
   
-  nationality=$(pup 'text{}' <<< "${nationalities[$r]}" | xargs)
+  nationality=$(clean_contents "${nationalities[$r]}")
   #dbg "$nationality"
   
-  age=$(pup 'text{}' <<< "${ages[$r]}" | xargs)
+  age=$(clean_contents "${ages[$r]}")
+  #dbg "$age"
   
-  note=$(pup 'text{}' <<< "${notes[$r]}" | sed 's/\[.*\]//' | xargs)
+  note=$(clean_contents "${notes[$r]}")
   note=$(decode "$note")
   #dbg "$note"
   
   declare -a sed_args=(
-    "-e s/\"\$date\"/\"$date\"/"
-    "-e s/\"\$country\"/\"$country\"/"
-    "-e s/\"\$place\"/\"$place\"/"
-    "-e s/\"\$name\"/\"$name\"/"
-    "-e s/\"\$nationality\"/\"$nationality\"/"
-    "-e s@\"\$age\"@\"$age\"@"
-    "-e s/\"\$note\"/\"$note\"/"
-    "-e s/\"\$batch\"/\"$batch\"/"
+    "--expression=s/\"\$date\"/\"$date\"/"
+    "--expression=s/\"\$sort_date\"/\"$sort_date\"/"
+    "--expression=s/\"\$country\"/\"$country\"/"
+    "--expression=s/\"\$place\"/\"$place\"/"
+    "--expression=s/\"\$name\"/\"$name\"/"
+    "--expression=s@\"\$nationality\"@\"$nationality\"@"
+    "--expression=s@\"\$age\"@\"$age\"@"
+    "--expression=s/\"\$note\"/\"$note\"/"
+    "--expression=s/\"\$batch\"/\"$batch\"/"
   )
   
-  #args="${sed_args[*]}"
-  #dbg "$args"
-  
-  sql+=($(sed "${sed_args[@]}" <<< "$sql_template"))
+  populated_sql=$(sed "${sed_args[@]}" <<< "$sql_template")
+  sql+=("$populated_sql")
   #dbg "$sql"
 
-  #sqlite3 covid.db "$sql"
-  #dbg "sql executed."
   ((++r))
 done
 
