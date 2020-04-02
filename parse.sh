@@ -115,11 +115,12 @@ readonly sql_template;
 
 declare -i r=0
 declare -ir rows=$(grep -c "<tr>" <<< "$table")
+
+declare -a sql=("BEGIN TRANSACTION;")
 #declare -ir rows=3
 while [ $r -lt "$rows" ]; do
   dbg "Row $r of $rows"
   
-  IFS="|"
   date=$(pup 'text{}' <<< "${dates[$r]}"| xargs | cut -d' ' -f1-2)
   #dbg "$date"
   
@@ -155,11 +156,14 @@ while [ $r -lt "$rows" ]; do
   #args="${sed_args[*]}"
   #dbg "$args"
   
-  declare sql
-  sql=$(sed "${sed_args[@]}" <<< "$sql_template")
+  sql+=($(sed "${sed_args[@]}" <<< "$sql_template"))
   #dbg "$sql"
 
   #sqlite3 covid.db "$sql"
   #dbg "sql executed."
   ((++r))
 done
+
+sql+=("COMMIT;")
+
+sqlite3 covid.db <<< "${sql[*]}"
