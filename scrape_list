@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o errtrace
+set -o nounset
+set -o pipefail
+
+declare __dir
+__dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly __dir
+
+declare __file
+__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+readonly __file
+
+declare __base
+__base="$(basename "${__file}" .sh)"
+readonly __base
+
+declare force_overwrite=false
+declare output_file=""
+
+err() {
+	local exit_status=$1
+	local reason="$2"
+	shift 2
+	
+	printf "%s\n" "Error: $reason" >&2
+	if [[ $# -gt 0 ]]; then
+		printf "%s\n" "$@" >&2
+	fi
+	exit "$exit_status"
+}
+
+exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+usage() {
+  cat << MSG 
+Gets the current list of notable people who have died from COVID-19 from Wikipedia.
+
+Usage:
+  ${__base} [options]
+
+OPTIONS
+  -o, --output <FILE>
+      Specifies the file to write the retrieved HTML to. If this is not provided, writes to STDOUT instead. If the file exists, you will be asked to confirm overwriting it.
+  -f, --force
+      Overwrites the output file without prompting.
+  -h, --help
+      Prints this message.
+MSG
+}
+
+process_args() {
+  local output_flag=false
+  while [[ $# -gt 0 ]]; do
+	  if [[ $1 =~ ^- ]]; then
+		  # Convert combined short options into multiples short options (e.g. '-qb' to '-q -b')
+		  if [[ $1 =~ ^-[a-z]{2,} ]]; then
+			  param=$1
+			  shift
+			  set -- "${param:0:2}" "-${param:2}" "$@"
+			  unset param
+		  fi
+		  case $1 in
+			  -h | --help)  
+                usage
+                exit 0  
+              ;;
+			  -f | --force) 
+                force_overwrite=true
+              ;;
+			  -o | --output)
+			    output_flag=true
+              ;;
+			  *)
+                err 1 "Unknown option '$1'"
+              ;;
+		  esac
+		  shift
+	  else
+	    if [[ "$output_flag" == true ]]; then
+          output_file="$1"
+        else
+          err 1 "Unknown option '$1'"
+        fi
+        break
+	  fi
+  done
+  
+  # some sanity checks
+  if [[ -z "$output_file" ]]; then
+    if [[ "$output_flag" == true ]]; then
+      err 1 "Output file given but no file specified."
+    fi
+    
+    if [[ "$force_overwrite" == true ]]; then
+      err 1 "Force option given but no output file specified."
+    fi
+  fi
+}
+
+check_overwrite() {
+  if [[ -e "$output_file" ]]; then
+    if [[ -d "$output_file" ]]; then
+      err 1 "Directory was specified as output file."
+    fi
+    
+    if [[ "$force_overwrite" != true ]]; then
+      read -r -n 1 -p "File already exists. Overwrite? (y/n)? " res
+      case ${res:0:1} in
+        y|Y) ;; # no op; we fail if it's not yes.
+        *)
+          printf "\n"
+          err 1 "$output_file already exists. Use the -f flage to force overwriting an existing file."
+        ;;
+      esac
+    fi
+  fi
+}
+
+verify_env() {
+  exists "curl" || err 1 "Please install curl before executing."
+}
+
+scrape() {
+  curl "https://en.m.wikipedia.org/wiki/List_of_deaths_from_the_2019%E2%80%9320_coronavirus_pandemic"
+}
+
+main() {
+  verify_env
+  
+  process_args "$@"
+
+  check_overwrite
+  
+  local output=""
+  if [[ -z "$output_file" ]]; then
+    output=/dev/stdout
+  else
+    output="$output_file"
+  fi
+  
+  echo "$output"
+  
+  scrape > "$output"
+}
+
+main "$@"
