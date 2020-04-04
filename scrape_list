@@ -17,24 +17,17 @@ declare __base
 __base="$(basename "${__file}" .sh)"
 readonly __base
 
+# shellcheck source=./lib/env.sh
+source "$__dir"/lib/env.sh
+
+# shellcheck source=./lib/log.sh
+source "$__dir"/lib/log.sh
+
+# shellcheck source=./lib/exit_codes.sh
+source "$__dir"/lib/exit_codes.sh
+
 declare force_overwrite=false
 declare output_file=""
-
-err() {
-	local exit_status=$1
-	local reason="$2"
-	shift 2
-	
-	printf "%s\n" "Error: $reason" >&2
-	if [[ $# -gt 0 ]]; then
-		printf "%s\n" "$@" >&2
-	fi
-	exit "$exit_status"
-}
-
-exists() {
-  command -v "$1" >/dev/null 2>&1
-}
 
 usage() {
   cat << MSG 
@@ -76,7 +69,7 @@ process_args() {
 			    output_flag=true
               ;;
 			  *)
-                err 1 "Unknown option '$1'"
+                err $EX_UNKNOWN_OPT "Unknown option '$1'"
               ;;
 		  esac
 		  shift
@@ -84,7 +77,7 @@ process_args() {
 	    if [[ "$output_flag" == true ]]; then
           output_file="$1"
         else
-          err 1 "Unknown option '$1'"
+          err $EX_UNKNOWN_OPT "Unknown option '$1'"
         fi
         break
 	  fi
@@ -93,11 +86,11 @@ process_args() {
   # some sanity checks
   if [[ -z "$output_file" ]]; then
     if [[ "$output_flag" == true ]]; then
-      err 1 "Output file given but no file specified."
+      err $EX_MISSING_OUTPUT_FILE "Output file option given but no file specified."
     fi
     
     if [[ "$force_overwrite" == true ]]; then
-      err 1 "Force option given but no output file specified."
+      err $EX_FORCE_NO_OUTPUT "Force option given but no output file specified."
     fi
   fi
 }
@@ -105,7 +98,7 @@ process_args() {
 check_overwrite() {
   if [[ -e "$output_file" ]]; then
     if [[ -d "$output_file" ]]; then
-      err 1 "Directory was specified as output file."
+      err $EX_OUTPUT_FILE_DIRECTORY "Directory was specified as output file."
     fi
     
     if [[ "$force_overwrite" != true ]]; then
@@ -114,7 +107,7 @@ check_overwrite() {
         y|Y) ;; # no op; we fail if it's not yes.
         *)
           printf "\n"
-          err 1 "$output_file already exists. Use the -f flage to force overwriting an existing file."
+          err $EX_OUTPUT_FILE_EXISTS_NO_OW "$output_file already exists. Use the -f flag to force overwriting an existing file."
         ;;
       esac
     fi
@@ -122,7 +115,7 @@ check_overwrite() {
 }
 
 verify_env() {
-  exists "curl" || err 1 "Please install curl before executing."
+  exists "curl" || err $EX_MISSING_CMD "Please install curl before executing."
 }
 
 scrape() {
@@ -136,16 +129,11 @@ main() {
 
   check_overwrite
   
-  local output=""
   if [[ -z "$output_file" ]]; then
-    output=/dev/stdout
+    scrape
   else
-    output="$output_file"
+    scrape > "$output_file"
   fi
-  
-  echo "$output"
-  
-  scrape > "$output"
 }
 
 main "$@"

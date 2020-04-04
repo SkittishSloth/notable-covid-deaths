@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o errtrace
+set -o nounset
+set -o pipefail
+
+declare __dir
+__dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly __dir
+
+declare __file
+__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+readonly __file
+
+declare __base
+__base="$(basename "${__file}" .sh)"
+readonly __base
+
+# shellcheck source=./lib/env.sh
+source "$__dir"/lib/env.sh
+
+# shellcheck source=./lib/log.sh
+source "$__dir"/lib/log.sh
+
+# shellcheck source=./lib/exit_codes.sh
+source "$__dir"/lib/exit_codes.sh
+
+declare input_file=""
+declare output_file=""
+declare format=""
+
+usage() {
+  cat << MSG
+Parses the HTML from scrape_list into a more usable format.
+
+Usage:
+  ${__base} [options]
+
+OPTIONS
+  -i, --input <FILE>
+      The file to read the HTML from. If not specified, reads from STDIN.
+  -o, --output <FILE>
+      Specifies the file to write the results to. If not specified, writes to STDOUT instead. If the file exists, you will be asked to confirm overwriting it.
+  -f, --force
+      Overwrites the output file without prompting.
+  -F, --format <sql|json|csv>
+      The format to generate. Defaults to sql inserts for sqlite3.
+  -h, --help
+      Prints this message.
+MSG
+}
+
+prompt_input_or_output() {
+  local file="$1"
+  echo "Both input and output file flags were specified."
+  echo "$file"
+  read -r -n 1 -p "Please specify whether the above file is [i]nput or [o]utput." res
+  case ${res:0:1} in
+    I|i)
+      input_file="$file"
+    ;;
+    O|o)
+      output_file="$file"
+    ;;
+    *)
+      printf "\n"
+      err $EX_FILE_AMBIGUITY "Unable to determine if input or output file: $file"
+    ;;
+  esac
+}
+
+process_args() {
+  local output_flag=false
+  local input_flag=false
+  local format_flag=false
+  while [[ $# -gt 0 ]]; do
+	  if [[ $1 =~ ^- ]]; then
+		  # Convert combined short options into multiples short options (e.g. '-qb' to '-q -b')
+		  if [[ $1 =~ ^-[a-z]{2,} ]]; then
+			  param=$1
+			  shift
+			  set -- "${param:0:2}" "-${param:2}" "$@"
+			  unset param
+		  fi
+		  case $1 in
+			  -h | --help)  
+                usage
+                exit 0  
+              ;;
+			  -f | --force) 
+                force_overwrite=true
+              ;;
+			  -o | --output)
+			    output_flag=true
+			  ;;
+			  -i | --input)
+			    input_flag=true
+              ;;
+              -F | --format)
+                format_flag=true
+              ;;
+			  *)
+                err $EX_UNKNOWN_OPT "Unknown option '$1'"
+              ;;
+		  esac
+		  shift
+	  else
+	    local arg="$1"
+	    
+	    if [[ "$format_flag" == true && -z "$format" ]]; then
+          case "$arg" in
+            sql|json|csv)
+              format="$arg"
+              shift
+              continue
+            ;;
+          esac  
+        fi
+        
+        [[ "$input_flag" == true && -z "$input_file" ]] && needs_input_file=true || needs_input_file=false
+        [[ "$output_flag" == true && -z "$output_file" ]] && needs_output_file=true || needs_output_file=false
+        if [[ "$needs_input_file" == true && "$needs_output_file" == true ]]; then
+          prompt_input_or_output "$arg"    
+        elif [[ "$needs_output_file" == true ]]; then
+          output_file="$arg"
+        elif [[ "$needs_input_file" == true ]]; then
+          input_file="$arg"
+        else
+          err $EX_UNKNOWN_OPT "Unknown option '$1'"
+        fi
+        shift
+	  fi
+  done
+  
+  # some sanity checks
+  if [[ -z "$output_file" ]]; then
+    if [[ "$output_flag" == true ]]; then
+      err $EX_MISSING_OUTPUT_FILE "Output file option given but no file specified."
+    fi
+    
+    if [[ "$force_overwrite" == true ]]; then
+      err $EX_FORCE_NO_OUTPUT "Force option given but no output file specified."
+    fi
+  fi
+  
+  if [[ -z "$input_file" && "$input_flag" == true ]]; then
+      err $EX_MISSING_INPUT_FILE "Input file option given but no file specified."
+  fi
+  
+  if [[ -n "$input_file" ]]; then
+    [[ ! -e "$input_file" ]] && err $EX_INPUT_FILE_NOT_FOUND "The specified input file does not exist ($input_file)"
+    [[ -d "$input_file" ]] && err $EX_INPUT_FILE_DIRECTORY "Directory was specified as input file ($input_file)."
+  fi
+}
+
+check_overwrite() {
+  if [[ -e "$output_file" ]]; then
+    if [[ -d "$output_file" ]]; then
+      err $EX_OUTPUT_FILE_DIRECTORY "Directory was specified as output file."
+    fi
+    
+    if [[ "$force_overwrite" != true ]]; then
+      read -r -n 1 -p "Output file ($output_file) already exists. Overwrite? (y/n)? " res
+      case ${res:0:1} in
+        y|Y) ;; # no op; we fail if it's not yes.
+        *)
+          printf "\n"
+          err $EX_OUTPUT_FILE_EXISTS_NO_OW "$output_file already exists. Use the -f flag to force overwriting an existing file."
+        ;;
+      esac
+    fi
+  fi
+}
+
+validate_env() {
+  local missing=""
+  exists "pup" || missing+=$'\tpup: an HTML parser\n'
+  exists "jq" ||  missing+=$'\tjq:  a JSON parser\n'
+  
+  [[ -n "$missing" ]] && err $EX_MISSING_CMD $'Please ensure you have installed the following program(s):\n'"$missing"
+}
+
+main() {
+  validate_env
+  
+  process_args "$@"
+}
+
+main "$@"
