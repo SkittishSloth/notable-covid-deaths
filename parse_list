@@ -26,9 +26,22 @@ source "$__dir"/lib/log.sh
 # shellcheck source=./lib/exit_codes.sh
 source "$__dir"/lib/exit_codes.sh
 
+declare output_flag=false
+declare force_overwrite=false
+declare input_flag=false
+declare format_flag=false
+  
 declare input_file=""
 declare output_file=""
 declare format=""
+
+declare -a dates=()
+declare -a countries=()
+declare -a places=()
+declare -a names=()
+declare -a nationalities=()
+declare -a ages=()
+declare -a notes=()
 
 usage() {
   cat << MSG
@@ -71,9 +84,6 @@ prompt_input_or_output() {
 }
 
 process_args() {
-  local output_flag=false
-  local input_flag=false
-  local format_flag=false
   while [[ $# -gt 0 ]]; do
 	  if [[ $1 =~ ^- ]]; then
 		  # Convert combined short options into multiples short options (e.g. '-qb' to '-q -b')
@@ -132,26 +142,6 @@ process_args() {
         shift
 	  fi
   done
-  
-  # some sanity checks
-  if [[ -z "$output_file" ]]; then
-    if [[ "$output_flag" == true ]]; then
-      err $EX_MISSING_OUTPUT_FILE "Output file option given but no file specified."
-    fi
-    
-    if [[ "$force_overwrite" == true ]]; then
-      err $EX_FORCE_NO_OUTPUT "Force option given but no output file specified."
-    fi
-  fi
-  
-  if [[ -z "$input_file" && "$input_flag" == true ]]; then
-      err $EX_MISSING_INPUT_FILE "Input file option given but no file specified."
-  fi
-  
-  if [[ -n "$input_file" ]]; then
-    [[ ! -e "$input_file" ]] && err $EX_INPUT_FILE_NOT_FOUND "The specified input file does not exist ($input_file)"
-    [[ -d "$input_file" ]] && err $EX_INPUT_FILE_DIRECTORY "Directory was specified as input file ($input_file)."
-  fi
 }
 
 check_overwrite() {
@@ -173,18 +163,128 @@ check_overwrite() {
   fi
 }
 
+validate_arguments() {
+  # some sanity checks
+  if [[ -z "$output_file" ]]; then
+    if [[ "$output_flag" == true ]]; then
+      err $EX_MISSING_OUTPUT_FILE "Output file option given but no file specified."
+    fi
+    
+    if [[ "$force_overwrite" == true ]]; then
+      err $EX_FORCE_NO_OUTPUT "Force option given but no output file specified."
+    fi
+  fi
+  
+  check_overwrite
+  
+  if [[ -z "$input_file" && "$input_flag" == true ]]; then
+      err $EX_MISSING_INPUT_FILE "Input file option given but no file specified."
+  fi
+  
+  if [[ -n "$input_file" ]]; then
+    if [[ ! -e "$input_file" ]]; then
+      err $EX_INPUT_FILE_NOT_FOUND "The specified input file does not exist ($input_file)"
+    fi
+    
+    if [[ -d "$input_file" ]]; then
+      err $EX_INPUT_FILE_DIRECTORY "Directory was specified as input file ($input_file)."
+    fi
+  fi
+}
+
 validate_env() {
   local missing=""
   exists "pup" || missing+=$'\tpup: an HTML parser\n'
   exists "jq" ||  missing+=$'\tjq:  a JSON parser\n'
   
-  [[ -n "$missing" ]] && err $EX_MISSING_CMD $'Please ensure you have installed the following program(s):\n'"$missing"
+  if [[ -n "$missing" ]]; then
+    err $EX_MISSING_CMD $'Please ensure you have installed the following program(s):\n'"$missing"
+  fi
+}
+
+read_html() {
+  cat "${input_file:-/dev/stdin}"
+}
+
+count_columns() {
+  pup "tr:nth-of-type(1)" <<< "$1" | grep --count "<th>"
+}
+
+initialize_column_map() {
+  local -n __map="$1"
+  local -ri columns="$2"
+  
+  local -i ages_col=6
+  local -i notes_col=7
+  
+  if [ "$columns" -gt 7 ]; then
+    ((++ages_col))
+    ((++notes_col))
+  fi
+  readonly ages_col
+  readonly notes_col
+  
+  # This isn't directly referenced, but
+  # it's used via nameref.
+  # shellcheck disable=2034
+  __map=(
+    ["dates"]=1
+    ["countries"]=2
+    ["places"]=3
+    ["names"]=4
+    ["nationalities"]=5
+    ["ages"]="$ages_col"
+    ["notes"]="$notes_col"
+  )
+}
+
+column_cells() {
+  local -n __arrays="$1"
+  local -r table="$2"
+  
+  for a in "${!__arrays[@]}"; do
+    local -n __array="$a"
+    
+    local -i column="${__arrays[$a]}"
+    
+    local cells_str
+    cells_str=$(pup --charset utf-8 "td:nth-child($column)" <<< "$table")
+    local -i i=0
+    
+    while read -r line; do
+      __array[i]="${__array[i]:-}${line}"$'\n'
+      if [ "$line" == "</td>" ]; then
+        ((++i))
+      fi
+    done <<< "$cells_str"
+  done
 }
 
 main() {
   validate_env
-  
+
   process_args "$@"
+
+  validate_arguments
+
+  local html
+  html=$(read_html)
+  readonly html
+  
+  local table
+  table=$(pup 'table.wikitable' <<< "$html")
+  readonly table
+  
+  local -i column_count
+  column_count=$(count_columns "$table")
+  readonly column_count
+  
+  local -A column_map=()
+  initialize_column_map column_map "$column_count"
+  
+  echo "${#column_map[@]}"
+  
+  column_cells column_map "$table"
 }
 
 main "$@"
